@@ -155,12 +155,12 @@ def ensure_user_email_column():
 
 def discover_real_network_devices():
     """
-    Discovers 100% real active network devices from the host operating system:
-    1. Active local network interface IPv4 and MAC address (Host PC).
-    2. Default Gateway router IPv4 and MAC address.
-    3. Active LAN devices discovered via full multi-threaded subnet ping sweep & Windows ARP table (arp -a).
-    4. Detects real ARP spoofing if any device impersonates the Default Gateway MAC.
+    Discovers real active network devices from the host OS.
+    Returns empty list on non-Windows/cloud environments.
     """
+    import platform
+    if platform.system() != 'Windows' or os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV'):
+        return []
     devices = []
     seen_ips = set()
     hostname = socket.gethostname()
@@ -292,8 +292,13 @@ def discover_real_network_devices():
 def sync_real_network_devices(reset_mock_data=True):
     """
     Synchronizes real local network devices into SQLite database.
-    Clears out any synthetic mock devices and inactive subnets.
+    Skipped on Vercel/cloud environments where network scanning is not possible.
     """
+    # Vercel and other cloud platforms don't have ipconfig/arp — skip silently
+    if os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV'):
+        print('[NetGuardian] Cloud environment detected — network scan skipped.')
+        return []
+
     discovered = discover_real_network_devices()
     conn = get_db_connection()
     
