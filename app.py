@@ -588,15 +588,10 @@ def register():
 def login():
     if request.method == 'POST':
         username = (request.form.get('username', '') or '').strip()
-        email = (request.form.get('email', '') or '').strip()
         password = request.form.get('password', '')
 
         if not is_valid_username(username):
             flash('Username must be 3-50 characters and contain only letters, numbers, underscores, dots, or dashes.', 'danger')
-            return render_template('login.html')
-
-        if not is_valid_email(email):
-            flash('Please enter a valid email address.', 'danger')
             return render_template('login.html')
 
         if not is_valid_password(password):
@@ -620,33 +615,16 @@ def login():
         if user and check_password_hash(user['password_hash'], password):
             prior_failures = FAILED_LOGIN_ATTEMPTS.get(get_login_attempt_key(username), {}).get('count', 0)
             clear_failed_login_attempts(username)
-            # Sync user's email if provided
-            if email and (not user['email'] or user['email'].lower() != email.lower()):
-                conn.execute('UPDATE users SET email = ? WHERE id = ?', (email, user['id']))
-                conn.commit()
             conn.close()
 
-            otp_code = generate_otp()
-            recipient_email = email if email else get_user_email_address(user)
-            log_login_activity(username, 'Login request approved', f'OTP sent to {recipient_email}. Prior failed attempts: {prior_failures}.')
+            log_login_activity(username, 'User logged in successfully', f'Password verified. Prior failed attempts: {prior_failures}.')
             session.clear()
             session.permanent = True
-            session['pending_user_id'] = user['id']
-            session['pending_username'] = user['username']
-            session['pending_role'] = user['role']
-            session['pending_email'] = recipient_email
-            session['pending_otp'] = otp_code
-            session['pending_otp_expires'] = time.time() + 300
-            session['pending_otp_debug'] = None
-
-            delivery_mode, error_detail = send_otp_email(recipient_email, otp_code)
-            if delivery_mode == 'smtp':
-                flash(f'A verification code was sent to {recipient_email}. Please check your inbox.', 'info')
-                return redirect(url_for('verify_otp'))
-            else:
-                session.pop('pending_otp_debug', None)
-                flash(f'Unable to send the verification code to Gmail. Please check your Gmail App Password and network access. {error_detail}', 'danger')
-                return render_template('login.html')
+            session['user_id'] = user['id']
+            session['username'] = user['username']
+            session['role'] = user['role']
+            flash(f'Welcome back, {username}!', 'success')
+            return redirect(url_for('dashboard'))
         else:
             conn.close()
             locked_now = record_failed_login(username)
@@ -660,75 +638,6 @@ def login():
                 flash(f'Invalid username or password. {remaining} attempt(s) remaining before lockout.', 'danger')
 
     return render_template('login.html')
-
-
-@app.route('/verify-otp', methods=['GET', 'POST'])
-def verify_otp():
-    if 'pending_user_id' not in session:
-        flash('Please log in before verifying your account.', 'warning')
-        return redirect(url_for('login'))
-
-    if request.method == 'POST':
-        submitted_otp = (request.form.get('otp', '') or '').strip()
-        expires_at = float(session.get('pending_otp_expires', 0))
-
-        if time.time() > expires_at:
-            username = session.get('pending_username')
-            log_login_activity(username, 'OTP verification failed', 'Verification code expired before login was confirmed.')
-            flash('Your verification code has expired. Please sign in again or request a new code.', 'warning')
-            return redirect(url_for('login'))
-
-        if not submitted_otp.isdigit() or len(submitted_otp) != 6:
-            username = session.get('pending_username')
-            log_login_activity(username, 'OTP verification failed', 'User entered a malformed 6-digit verification code.')
-            flash('Enter the 6-digit verification code.', 'danger')
-            return render_template('verify_otp.html', email=session.get('pending_email'))
-
-        if submitted_otp != session.get('pending_otp'):
-            username = session.get('pending_username')
-            log_login_activity(username, 'OTP verification failed', 'Incorrect verification code entered during login.')
-            flash('Incorrect verification code. Please try again.', 'danger')
-            return render_template('verify_otp.html', email=session.get('pending_email'))
-
-        user_id = session.get('pending_user_id')
-        username = session.get('pending_username')
-        role = session.get('pending_role')
-
-        log_login_activity(username, 'User logged in successfully', 'OTP verification passed and user authenticated.')
-        session.clear()
-        session.permanent = True
-        session['user_id'] = user_id
-        session['username'] = username
-        session['role'] = role
-        flash(f'Welcome back, {username}! Email verification successful.', 'success')
-        return redirect(url_for('dashboard'))
-
-    return render_template('verify_otp.html', email=session.get('pending_email'))
-
-
-@app.route('/resend-otp', methods=['POST'])
-def resend_otp():
-    if 'pending_user_id' not in session:
-        flash('Please log in before requesting a verification code.', 'warning')
-        return redirect(url_for('login'))
-
-    recipient_email = session.get('pending_email')
-    otp_code = generate_otp()
-    session['pending_otp'] = otp_code
-    session['pending_otp_expires'] = time.time() + 300
-    session['pending_otp_debug'] = None
-
-    delivery_mode, error_detail = send_otp_email(recipient_email, otp_code)
-    if delivery_mode == 'smtp':
-        flash(f'A fresh verification code was sent to {recipient_email}.', 'info')
-    elif delivery_mode == 'console':
-        session['pending_otp_debug'] = otp_code
-        flash(f'Gmail SMTP not configured. New code: {otp_code}', 'warning')
-    else:
-        session['pending_otp_debug'] = otp_code
-        flash(f'Could not reach Gmail SMTP ({error_detail}). New code: {otp_code}', 'warning')
-
-    return redirect(url_for('verify_otp'))
 
 
 @app.route('/logout')
