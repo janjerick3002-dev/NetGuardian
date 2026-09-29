@@ -111,31 +111,50 @@ def log_login_activity(username, action, notes):
     conn.close()
 
 
+def _db_path():
+    """Returns writable DB path — /tmp on Vercel, local file otherwise."""
+    if os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV'):
+        return '/tmp/database.db'
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database.db')
+
 def get_db_connection():
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database.db')
-    conn = sqlite3.connect(db_path)
+    path = _db_path()
+    # On Vercel, /tmp/database.db may not exist yet — auto-init if missing
+    if not os.path.exists(path):
+        try:
+            _bootstrap_db(path)
+        except Exception as e:
+            print(f'[NetGuardian] Auto-init failed: {e}')
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     return conn
 
-def init_db():
-    conn = get_db_connection()
+def _bootstrap_db(path):
+    """Create schema in the given db path."""
     schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
+    conn = sqlite3.connect(path)
     with open(schema_path) as f:
         conn.executescript(f.read())
     conn.commit()
     conn.close()
+    print(f'[NetGuardian] Database bootstrapped at {path}')
+
+def init_db():
+    _bootstrap_db(_db_path())
 
 def ensure_db_initialized():
     """Create the database tables if they don't exist (first run on Vercel)."""
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database.db')
     try:
-        conn = sqlite3.connect(db_path)
-        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
-        exists = cur.fetchone()
-        conn.close()
-        if not exists:
-            print('[NetGuardian] Database not found — initialising schema...')
-            init_db()
+        path = _db_path()
+        if not os.path.exists(path):
+            _bootstrap_db(path)
+        else:
+            conn = sqlite3.connect(path)
+            cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+            exists = cur.fetchone()
+            conn.close()
+            if not exists:
+                _bootstrap_db(path)
     except Exception as e:
         print(f'[NetGuardian] DB init error: {e}')
 
@@ -1304,8 +1323,11 @@ def api_public_status():
 
 
 # Always run on startup — works both locally and on Vercel serverless
-ensure_db_initialized()
-ensure_user_email_column()
+try:
+    ensure_db_initialized()
+    ensure_user_email_column()
+except Exception as _startup_err:
+    print(f'[NetGuardian] Startup init warning: {_startup_err}')
 
 if __name__ == '__main__':
     sync_real_network_devices(reset_mock_data=True)
