@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+.venv-1/
+venv/
+env/
+
+# Secrets — never commit these
+.env
+client_secret.json
+
+# SQLite database (not persistent on Vercel anyway)
+database.db
+
+# VS Code
+.vscode/
+
+# Vercel build output
+.vercel/
