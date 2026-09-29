@@ -112,17 +112,32 @@ def log_login_activity(username, action, notes):
 
 
 def get_db_connection():
-    conn = sqlite3.connect('database.db')
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database.db')
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
     conn = get_db_connection()
-    with open('schema.sql') as f:
+    schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
+    with open(schema_path) as f:
         conn.executescript(f.read())
     conn.commit()
     conn.close()
-    sync_real_network_devices(reset_mock_data=True)
+
+def ensure_db_initialized():
+    """Create the database tables if they don't exist (first run on Vercel)."""
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database.db')
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        exists = cur.fetchone()
+        conn.close()
+        if not exists:
+            print('[NetGuardian] Database not found — initialising schema...')
+            init_db()
+    except Exception as e:
+        print(f'[NetGuardian] DB init error: {e}')
 
 
 def ensure_user_email_column():
@@ -1374,10 +1389,11 @@ def api_public_status():
     return jsonify({'is_safe': spoofed == 0, 'active_spoofing_alerts': spoofed})
 
 
+# Always run on startup — works both locally and on Vercel serverless
+ensure_db_initialized()
+ensure_user_email_column()
+
 if __name__ == '__main__':
-    if not os.path.exists('database.db'):
-        init_db()
-    ensure_user_email_column()
     sync_real_network_devices(reset_mock_data=True)
     app.run(debug=os.environ.get('NETGUARDIAN_DEBUG', 'false').lower() == 'true', host='0.0.0.0', port=5000)
 
